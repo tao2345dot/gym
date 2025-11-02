@@ -152,7 +152,7 @@ def generate_random_pillars(count=2, radius=0.08, height=2.0,
 OBSTACLES = []
 
 # 避障参数
-COLLISION_THRESHOLD = 0.5  # 碰撞检测距离阈值（障碍物半径 + 安全余量）
+COLLISION_THRESHOLD = 0.15  # 碰撞检测距离阈值（障碍物半径 + 安全余量）- 从0.5降低到0.15
 WAYPOINT_REACH_THRESHOLD = 0.15  # 路径点到达阈值
 TARGET_REACH_THRESHOLD = 0.2  # 目标点到达阈值
 
@@ -596,6 +596,15 @@ class SACContinuousNavigator:
                 
                 # 11. 检查是否到达当前导航目标
                 distance_to_target = np.linalg.norm(current_pos - nav_target)
+                
+                # DEBUG: 每100步打印一次详细信息
+                if self.stats['steps'] % 100 == 0:
+                    # 计算实际 RPM
+                    rpm_values = self.env.HOVER_RPM * (1 + 0.5 * action[0])
+                    print(f"\n[DEBUG] Step {self.stats['steps']}:")
+                    print(f"  位置: {current_pos}  目标: {nav_target}  距离: {distance_to_target:.3f}m")
+                    print(f"  动作值: {action[0]}  范围: [{action.min():.3f}, {action.max():.3f}]")
+                    print(f"  RPM: [{rpm_values.min():.0f}, {rpm_values.max():.0f}]  (HOVER={self.env.HOVER_RPM:.0f})")
                 
                 if distance_to_target < reach_threshold:
                     if self.avoiding:
