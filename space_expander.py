@@ -92,6 +92,16 @@ class ExtendedHoverAviary(HoverAviary):
         z_min, z_max = self.EXTENDED_SPACE['z_range']
         tilt_limit = self.EXTENDED_SPACE['tilt_limit']
         
+        # 检查是否禁用截断（用于演示模式）
+        disable_truncation = self.EXTENDED_SPACE.get('disable_truncation', False)
+        if disable_truncation:
+            # 演示模式：仅在时间超限时截断
+            current_time = self.step_counter/self.PYB_FREQ
+            if current_time > self.EPISODE_LEN_SEC:
+                print(f"[截断] Episode 时长达到限制: {current_time:.2f}s > {self.EPISODE_LEN_SEC}s")
+                return True
+            return False
+        
         # 检查是否超出扩展空间边界
         x_out = state[0] < x_min or state[0] > x_max
         y_out = state[1] < y_min or state[1] > y_max  
