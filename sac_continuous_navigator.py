@@ -600,7 +600,7 @@ class SACContinuousNavigator:
                 # DEBUG: 每100步打印一次详细信息
                 if self.stats['steps'] % 100 == 0:
                     # 计算实际 RPM
-                    rpm_values = self.env.HOVER_RPM * (1 + 0.5 * action[0])
+                    rpm_values = self.env.HOVER_RPM * (1 + 0.3 * action[0])
                     print(f"\n[DEBUG] Step {self.stats['steps']}:")
                     print(f"  位置: {current_pos}  目标: {nav_target}  距离: {distance_to_target:.3f}m")
                     print(f"  动作值: {action[0]}  范围: [{action.min():.3f}, {action.max():.3f}]")
