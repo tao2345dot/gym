@@ -627,7 +627,7 @@ class SACContinuousNavigator:
                 if self.status_displayer is not None:
                     status_info = {
                         'position': current_pos,
-                        'target': self.current_target if self.current_target else [0, 0, 0],
+                        'target': self.current_target if self.current_target is not None else [0, 0, 0],
                         'distance': distance_to_target,
                         'targets_reached': self.stats['targets_reached'],
                         'steps': self.stats['steps'],
@@ -641,11 +641,11 @@ class SACContinuousNavigator:
                         'position': current_pos,
                         'velocity': obs[10:13] if len(obs) > 13 else [0, 0, 0],
                         'orientation': obs[7:10] if len(obs) > 10 else [0, 0, 0],
-                        'target_position': self.current_target if self.current_target else [0, 0, 0],
+                        'target_position': self.current_target if self.current_target is not None else [0, 0, 0],
                         'distance_to_target': distance_to_target
                     }
                     controller_status = {
-                        'target': self.current_target if self.current_target else [0, 0, 0],
+                        'target': self.current_target if self.current_target is not None else [0, 0, 0],
                         'distance': distance_to_target,
                         'mode': 'AVOIDING' if self.avoiding else 'NAVIGATING',
                         'is_paused': self.paused,
@@ -843,6 +843,15 @@ class NetworkCommandServer:
             elif command['type'] == 'home':
                 self.navigator.add_target(self.navigator.home_position)
                 response = {'status': 'success', 'message': '返回起点'}
+            
+            elif command['type'] == 'stop':
+                # 停止飞行：清空目标队列并设置当前位置为目标
+                self.navigator.target_queue.clear()
+                current_pos = self.navigator.env.pos[0]
+                self.navigator.current_target = current_pos.copy()
+                self.navigator.avoidance_waypoint = None  # 清除避障路径点
+                response = {'status': 'success', 'message': f'已停止飞行，悬停在当前位置: [{current_pos[0]:.2f}, {current_pos[1]:.2f}, {current_pos[2]:.2f}]'}
+                print(f"[导航] 🛑 停止飞行命令已执行")
             
             else:
                 response = {'status': 'error', 'message': '未知命令'}
