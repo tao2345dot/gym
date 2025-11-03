@@ -338,6 +338,9 @@ class SACContinuousNavigator:
         try:
             client_id = self.env.CLIENT
             
+            # 清空旧的障碍物 ID 列表（reset 后旧 ID 已失效）
+            self.obstacle_ids.clear()
+            
             # 添加柱子（使用生成的随机位置）
             for i, pillar in enumerate(self.obstacles):
                 obs_id = self._add_obstacle(
@@ -427,7 +430,13 @@ class SACContinuousNavigator:
             
             # 检查 XY 平面距离和 Z 轴高度
             if distance_xy < (obs['radius'] + COLLISION_THRESHOLD):
-                if abs(current_pos[2] - obs_pos[2]) < obs['height'] / 2:
+                # 只有在无人机高度低于柱子顶部时才需要避障
+                # 柱子底部 z=0, 顶部 z=height, 中心 z=height/2
+                pillar_top = obs['height']  # 柱子顶部高度
+                pillar_bottom = 0.0         # 柱子底部高度
+                
+                # 如果无人机在柱子高度范围内，才需要避障
+                if pillar_bottom - 0.1 < current_pos[2] < pillar_top + 0.1:
                     return True, obs
         
         return False, None
@@ -518,6 +527,9 @@ class SACContinuousNavigator:
         # 重置环境
         obs, info = self.env.reset(seed=42, options={})
         
+        # 重新添加障碍物（reset 会清除所有物体）
+        self._setup_obstacles()
+        
         # 主循环
         try:
             while not self.exit_requested:
@@ -594,13 +606,21 @@ class SACContinuousNavigator:
                 # 10. 执行动作
                 obs, reward, terminated, truncated, info = self.env.step(action)
                 
+                # 10.5 检查是否被截断（失控保护）
+                if truncated:
+                    print(f"\n[安全] ⚠️ 检测到失控状态，正在重置...")
+                    obs, info = self.env.reset(seed=42, options={})
+                    self._setup_obstacles()  # 重新添加障碍物
+                    print(f"[安全] ✅ 已重置，继续导航到目标: {self.current_target}")
+                    continue  # 跳过本次循环的剩余部分
+                
                 # 11. 检查是否到达当前导航目标
                 distance_to_target = np.linalg.norm(current_pos - nav_target)
                 
                 # DEBUG: 每100步打印一次详细信息
                 if self.stats['steps'] % 100 == 0:
                     # 计算实际 RPM
-                    rpm_values = self.env.HOVER_RPM * (1 + 0.3 * action[0])
+                    rpm_values = self.env.HOVER_RPM * (1 + 0.1 * action[0])
                     print(f"\n[DEBUG] Step {self.stats['steps']}:")
                     print(f"  位置: {current_pos}  目标: {nav_target}  距离: {distance_to_target:.3f}m")
                     print(f"  动作值: {action[0]}  范围: [{action.min():.3f}, {action.max():.3f}]")
