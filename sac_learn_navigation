@@ -1,0 +1,307 @@
+"""
+SAC 导航任务训练脚本
+
+特性：
+1. 使用 NavigationAviary（15维观测，包含目标位置）
+2. 每个 episode 随机目标
+3. 优化的奖励函数和超参数
+4. 自动保存最佳模型
+
+使用方法：
+    python -m gym_pybullet_drones.custom.sac_learn_navigation --gui false --local true
+
+预计训练时间：RTX 4050 约 2-3 小时（50万步）
+"""
+import os
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+
+import time
+from datetime import datetime
+import argparse
+import numpy as np
+import torch
+from stable_baselines3 import SAC
+from stable_baselines3.common.env_util import make_vec_env
+from stable_baselines3.common.callbacks import EvalCallback
+from stable_baselines3.common.evaluation import evaluate_policy
+from stable_baselines3.common.monitor import Monitor
+
+from gym_pybullet_drones.envs.NavigationAviary import NavigationAviary
+from gym_pybullet_drones.utils.enums import ObservationType, ActionType
+from gym_pybullet_drones.utils.utils import sync, str2bool
+
+# ============================================================================
+# 配置参数
+# ============================================================================
+NUM_ENV = 8  # SAC 并行环境数（RTX 4050 适配）
+EXP_NAME = "sac_navigation_with_target"
+CUDA = "cuda:0"
+
+DEFAULT_OUTPUT_FOLDER = 'results'
+DEFAULT_GUI = False
+DEFAULT_RECORD_VIDEO = False
+DEFAULT_COLAB = False
+
+DEFAULT_OBS = ObservationType('kin')
+DEFAULT_ACT = ActionType('rpm')
+
+
+def run(output_folder=DEFAULT_OUTPUT_FOLDER, gui=DEFAULT_GUI, plot=True, 
+        colab=DEFAULT_COLAB, record_video=DEFAULT_RECORD_VIDEO, local=True):
+    """
+    主训练流程
+    
+    参数：
+        output_folder: 保存路径
+        gui: 是否显示 GUI（训练时建议关闭）
+        plot: 是否绘制结果
+        colab: 是否在 Colab 运行
+        record_video: 是否录制视频
+        local: 是否本地长训练（True=50万步，False=100步测试）
+    """
+    
+    # ========================================================================
+    # 1. 创建保存目录
+    # ========================================================================
+    timestamp = datetime.now().strftime("%m.%d.%Y_%H.%M.%S")
+    filename = os.path.join(output_folder, f'sac-navigation-{timestamp}')
+    os.makedirs(filename, exist_ok=True)
+    
+    print("=" * 80)
+    print(f"🚁 SAC 导航任务训练")
+    print(f"📁 保存路径: {filename}")
+    print(f"🎯 任务: 随机目标导航（15维观测，包含目标位置）")
+    print(f"💻 设备: {CUDA}")
+    print(f"🔢 并行环境: {NUM_ENV}")
+    print(f"📈 训练步数: {int(5e5) if local else int(1e2)}")
+    print("=" * 80)
+    
+    # ========================================================================
+    # 2. 创建训练和评估环境
+    # ========================================================================
+    print("\n🌍 创建环境...")
+    
+    # 关键：设置初始高度为 1.0m（避免与测试环境不一致）
+    initial_height = 1.0
+    initial_xyzs = np.array([[0, 0, initial_height]])
+    
+    print(f"  ⚙️ 初始高度: {initial_height}m（训练和测试保持一致）")
+    
+    # 训练环境（向量化）
+    train_env = make_vec_env(
+        NavigationAviary,
+        env_kwargs=dict(
+            obs=DEFAULT_OBS,
+            act=DEFAULT_ACT,
+            gui=False,  # 训练时不显示 GUI
+            initial_xyzs=initial_xyzs  # ← 关键修复！
+        ),
+        n_envs=NUM_ENV,
+        seed=0
+    )
+    
+    # 评估环境（单环境）
+    eval_env = Monitor(
+        NavigationAviary(
+            obs=DEFAULT_OBS,
+            act=DEFAULT_ACT,
+            gui=gui,  # 评估时可选显示
+            initial_xyzs=initial_xyzs  # ← 保持一致
+        ),
+        info_keywords=("is_success", "distance_to_target")
+    )
+    
+    # 打印空间信息
+    print(f"  ✅ 动作空间: {train_env.action_space}")
+    print(f"  ✅ 观测空间: {train_env.observation_space}")
+    print(f"     - 维度: {train_env.observation_space.shape[0]}")
+    print(f"     - 前12维: 状态 (pos, rpy, vel, ang_vel)")
+    print(f"     - 后3维: 目标位置 (target_x, target_y, target_z)")
+    
+    # ========================================================================
+    # 3. 创建 SAC 模型
+    # ========================================================================
+    print("\n🧠 创建 SAC 模型...")
+    
+    # 网络结构（actor 和 critic 分别定义）
+    policy_kwargs = dict(
+        activation_fn=torch.nn.ReLU,
+        net_arch=dict(
+            pi=[256, 256, 256],  # Actor: 3层256单元
+            qf=[256, 256, 256]   # Critic: 3层256单元
+        )
+    )
+    
+    # SAC 模型配置
+    model = SAC(
+        'MlpPolicy',
+        train_env,
+        policy_kwargs=policy_kwargs,
+        learning_rate=3e-4,           # 学习率
+        buffer_size=200000,            # Replay buffer 大小（20万）
+        learning_starts=10000,         # 前1万步随机探索
+        batch_size=256,                # 批量大小
+        tau=0.005,                     # 目标网络软更新系数
+        gamma=0.99,                    # 折扣因子
+        train_freq=1,                  # 每步训练
+        gradient_steps=1,              # 每次训练1步梯度
+        ent_coef='auto',               # 自动调整熵系数（SAC 关键）
+        target_update_interval=1,      # 每步更新目标网络
+        target_entropy='auto',         # 自动目标熵
+        tensorboard_log=f"{filename}/tb/",
+        verbose=1,
+        device=CUDA
+    )
+    
+    print(f"  ✅ 模型创建成功")
+    print(f"  📊 网络结构: Actor/Critic 各 3x256")
+    print(f"  💾 Replay Buffer: 20万")
+    print(f"  🎲 初始探索: 1万步")
+    
+    # ========================================================================
+    # 4. 设置训练回调
+    # ========================================================================
+    print("\n⚙️ 配置训练回调...")
+    
+    # ❌ 移除奖励阈值停止：让训练完整进行
+    # 之前的问题：奖励函数设计导致平均奖励 130，远超阈值 6.0，
+    # 但成功率却是 0%，所以提前停止是错误的
+    # 现在改用基于时间步数的完整训练
+    
+    # 评估回调：每5000步评估一次
+    eval_callback = EvalCallback(
+        eval_env,
+        callback_on_new_best=None,  # 不使用提前停止
+        best_model_save_path=f"{filename}/",
+        log_path=f"{filename}/",
+        eval_freq=5000,
+        n_eval_episodes=10,
+        deterministic=True,
+        render=False,
+        verbose=1
+    )
+    
+    print(f"  ✅ 评估频率: 每 5000 步")
+    print(f"  ✅ 训练策略: 完整训练 50 万步（无提前停止）")
+    print(f"  ✅ 每次评估: 10 episodes")
+    
+    # ========================================================================
+    # 5. 开始训练
+    # ========================================================================
+    print("\n" + "=" * 80)
+    print("🚀 开始训练...")
+    print("=" * 80)
+    
+    total_steps = int(5e5) if local else int(1e2)  # 本地50万步，测试100步
+    
+    start_time = time.time()
+    model.learn(
+        total_timesteps=total_steps,
+        callback=eval_callback,
+        log_interval=100,
+        progress_bar=True
+    )
+    training_time = time.time() - start_time
+    
+    print("\n" + "=" * 80)
+    print("✅ 训练完成！")
+    print(f"⏱️ 训练时长: {training_time/3600:.2f} 小时")
+    print(f"📁 模型保存在: {filename}/")
+    print("=" * 80)
+    
+    # ========================================================================
+    # 6. 保存最终模型
+    # ========================================================================
+    model.save(f"{filename}/final_model.zip")
+    print(f"\n💾 最终模型已保存: {filename}/final_model.zip")
+    
+    # ========================================================================
+    # 7. 评估最佳模型
+    # ========================================================================
+    print("\n📊 评估最佳模型...")
+    
+    best_model_path = f"{filename}/best_model.zip"
+    if os.path.exists(best_model_path):
+        model = SAC.load(best_model_path)
+        mean_reward, std_reward = evaluate_policy(
+            model,
+            eval_env,
+            n_eval_episodes=20,
+            deterministic=True
+        )
+        print(f"  ✅ 平均奖励: {mean_reward:.2f} ± {std_reward:.2f}")
+    else:
+        print("  ⚠️ 未找到 best_model.zip，使用最终模型")
+        mean_reward, std_reward = evaluate_policy(
+            model,
+            eval_env,
+            n_eval_episodes=20,
+            deterministic=True
+        )
+        print(f"  ✅ 平均奖励: {mean_reward:.2f} ± {std_reward:.2f}")
+    
+    # ========================================================================
+    # 8. 测试导航能力（可视化）
+    # ========================================================================
+    if gui and local:
+        print("\n🎮 可视化测试（3个随机目标）...")
+        test_env = NavigationAviary(obs=DEFAULT_OBS, act=DEFAULT_ACT, gui=True)
+        
+        for episode in range(3):
+            obs, info = test_env.reset()
+            print(f"\n  Episode {episode+1}:")
+            print(f"    起点: {test_env.INIT_XYZS[0]}")
+            print(f"    目标: {test_env.TARGET_POS[0]}")
+            print(f"    距离: {np.linalg.norm(test_env.TARGET_POS - test_env.INIT_XYZS):.2f}m")
+            
+            done = False
+            step = 0
+            while not done:
+                action, _ = model.predict(obs, deterministic=True)
+                obs, reward, terminated, truncated, info = test_env.step(action)
+                done = terminated or truncated
+                step += 1
+                
+                if step % 30 == 0:  # 每秒打印一次
+                    print(f"      Step {step}: dist={info['distance_to_target']:.3f}m")
+            
+            print(f"    结果: {'✅ 成功' if info['is_success'] else '❌ 失败'}")
+            print(f"    步数: {step}")
+            time.sleep(2)
+        
+        test_env.close()
+    
+    print("\n" + "=" * 80)
+    print("🎉 全部完成！")
+    print(f"📁 模型路径: {filename}/best_model.zip")
+    print("\n使用模型进行导航:")
+    print(f"  python -m gym_pybullet_drones.custom.start_sac_navigation \\")
+    print(f"    --model_path {filename}/best_model.zip \\")
+    print(f"    --gui true")
+    print("=" * 80)
+    
+    return filename
+
+
+# ============================================================================
+# 命令行入口
+# ============================================================================
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description='SAC 导航任务训练脚本 - 支持随机目标'
+    )
+    parser.add_argument('--gui', type=str2bool, default=DEFAULT_GUI,
+                        help='是否显示 PyBullet GUI（默认: False）')
+    parser.add_argument('--record_video', type=str2bool, default=DEFAULT_RECORD_VIDEO,
+                        help='是否录制视频（默认: False）')
+    parser.add_argument('--output_folder', type=str, default=DEFAULT_OUTPUT_FOLDER,
+                        help='结果保存路径（默认: results）')
+    parser.add_argument('--colab', type=str2bool, default=DEFAULT_COLAB,
+                        help='是否在 Colab 运行（默认: False）')
+    parser.add_argument('--local', type=str2bool, default=True,
+                        help='是否本地长训练（True=50万步，False=100步测试）')
+    
+    args = parser.parse_args()
+    
+    run(**vars(args))
