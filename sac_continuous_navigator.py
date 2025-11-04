@@ -285,6 +285,11 @@ class SACContinuousNavigator:
             init_pos = np.array([DEFAULT_INIT_POS])
             init_rpy = np.array([[0, 0, 0]])
             
+            # DEBUG: 打印配置值
+            print(f"[DEBUG] DEFAULT_INIT_POS = {DEFAULT_INIT_POS}")
+            print(f"[DEBUG] DEFAULT_TARGET_POS = {DEFAULT_TARGET_POS}")
+            print(f"[DEBUG] init_pos = {init_pos}")
+            
             self.env = ExtendedHoverAviary(
                 initial_xyzs=init_pos,
                 initial_rpys=init_rpy,
@@ -619,8 +624,8 @@ class SACContinuousNavigator:
                 
                 # DEBUG: 每100步打印一次详细信息
                 if self.stats['steps'] % 100 == 0:
-                    # 计算实际 RPM
-                    rpm_values = self.env.HOVER_RPM * (1 + 0.1 * action[0])
+                    # 计算实际 RPM（使用训练时的系数 0.05）
+                    rpm_values = self.env.HOVER_RPM * (1 + 0.05 * action[0])
                     print(f"\n[DEBUG] Step {self.stats['steps']}:")
                     print(f"  位置: {current_pos}  目标: {nav_target}  距离: {distance_to_target:.3f}m")
                     print(f"  动作值: {action[0]}  范围: [{action.min():.3f}, {action.max():.3f}]")
