@@ -48,8 +48,8 @@ TESTING_SPACE = {
 }
 
 # 默认位置配置（适合当前模型的小范围测试）
-DEFAULT_INIT_POS = [0, 0, 0.1]      # 默认起始位置 [x, y, z]（米）
-DEFAULT_TARGET_POS = [0, 0, 1.0]      # 与起始高度一致，确保快速响应
+DEFAULT_INIT_POS = [0, 0, 1.0]      # 从目标高度开始，避免大幅度爬升
+DEFAULT_TARGET_POS = [0, 0, 1.0]    # 与起始高度一致，确保快速响应
 
 # 推荐的测试目标点（在模型训练范围内）
 RECOMMENDED_TARGETS = [
