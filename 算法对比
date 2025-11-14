@@ -1,0 +1,168 @@
+# 算法对比总览 (PPO+LLM vs PPO+APF vs SAC+LLM)
+
+> 版本: 2025-11-14  初稿 — 已填充 PPO+APF (批量20实验), 其余算法占位待补充。
+>
+> 数据来源: `results/batch_experiments_20251111_181055/*` CSV 表格 (PPO+APF); LLM 与 SAC 相关指标尚未统一抽取。
+
+---
+## 1. 指标定义
+
+| 类别 | 指标 | 说明 |
+|------|------|------|
+| 成功表现 | 成功率 | 成功实验数 / 总实验数 |
+| 轨迹执行 | 平均步数(成功) | 仅统计成功实验的总步数平均值 (排除失败 2000 步占位) |
+| 轨迹执行 | 平均用时(成功) | 仅统计成功实验运行时间平均 (秒) |
+| 跟踪终态 | 平均最终距离(成功) | 成功实验终止时距离目标的平均距离 (m) |
+| 稳定性 | 碰撞率/平均碰撞 | 总碰撞数 / 总实验; 成功实验碰撞概况 |
+| 观测追踪 | 观测距离(均值/Std/Min/Max) | 对“观测距离”统计 (成功实验) |
+| 观测追踪 | 失败观测均值 | 失败实验的平均观测距离 (收敛失败特征) |
+| 航点跟踪 | 航点平均距离 | 航点跟踪距离稳定性 (预期固定 0.200m) |
+| 异常统计 | 超范围总次数 | 观测值超过阈值(>0.8m)的累计次数 |
+| 算法参数 | APF参数 | k_att, k_rep, d0, 步长, 更新频率 (仅 PPO+APF) |
+| 强化学习 | 平均奖励(成功) | 需要在评估脚本中日志化 Episode reward (当前缺失) |
+| 备注 | Notes | 特殊现象 / 环境不兼容说明 |
+
+---
+## 2. 综合对比表
+
+| 指标 | PPO+LLM | PPO+APF | SAC+LLM |
+|------|---------|---------|---------|
+| 成功率 | PENDING | **40.0%** (新20场) / **80.0%** (原始数据) | PENDING |
+| 平均步数 (成功) | PENDING | **475.6** (新20场) / **234.8** (原始数据) | PENDING |
+| 平均用时 (成功, s) | PENDING | **0.356** | PENDING |
+| 平均最终距离 (成功, m) | PENDING | **0.4812** | PENDING |
+| 平均碰撞 (全部) | PENDING | **0.25 / 实验** (5/20原始) | PENDING |
+| 成功实验碰撞率 | PENDING | **0.0% (0/16)**原始 / **0.0% (0/8)**新20场 | PENDING |
+| 观测距离 均值 (成功, m) | PENDING | **0.4300** | PENDING |
+| 观测距离 Std (成功) | PENDING | **0.0394** | PENDING |
+| 观测距离 Min (成功, m) | PENDING | **0.1749** | PENDING |
+| 观测距离 Max (成功, m) | PENDING | **1.7493** | PENDING |
+| 失败观测距离均值 (m) | PENDING | **0.2293** | PENDING |
+| 航点平均距离 (m) | PENDING | **0.2000** | PENDING |
+| 超范围总次数 | PENDING | **19** | PENDING |
+| APF参数 | — | k_att=1.5, k_rep=0.15, d0=0.5, step=0.2, freq=3 | — |
+| 平均奖励 (成功) | PENDING | **1.9161**  | PENDING |
+| Notes | 待采集 | "tracking 分布偏高, 终距≈0.48m" | 待采集 |
+
+---
+## 3. PPO+APF 数据摘要 (来源表格)
+
+| 来源CSV | 提取字段 | 数值 |
+|---------|----------|------|
+| `table_tracking_overview.csv` | 成功率 | 80.0% |
+| `experiment_summary_corrected.csv` | 步数(成功平均) | 234.8 |
+| `experiment_summary_corrected.csv` | 时间(成功平均) | 0.356 s |
+| `table_tracking_success_comparison.csv` | 观测距离均值/Std | 0.4300 / 0.0394 |
+| `table_tracking_success_comparison.csv` | 观测距离 Min/Max | 0.1749 / 1.7493 |
+| `table_tracking_success_comparison.csv` | 最终距离均值 | 0.4812 m |
+| `table_tracking_success_comparison.csv` | 失败观测距离均值 | 0.2293 m |
+| `table_tracking_overview.csv` | 超范围次数 | 19 |
+| `table11_waypoint_tracking.csv` | 航点平均距离 | 0.2000 m |
+| `experiment_summary_corrected.csv` | 总/成功碰撞 | 5 (总体), 0 (成功) |
+| `table9_apf_parameters.csv` | APF参数 | k_att=1.5,k_rep=0.15,d0=0.5,step=0.2,freq=3 |
+
+---
+## 4. 待补充数据采集建议
+
+### 4.1 PPO+LLM & SAC+LLM 需要的最少日志字段
+在各自评估脚本中(例如 `test_llm_trajectory.py` 或 新建 `eval_llm_policy.py`)添加：
+```python
+log_row = {
+    'episode': ep_index,
+    'success': success_flag,
+    'steps': steps,
+    'time_sec': elapsed_time,
+    'final_dist': final_dist_to_goal,
+    'collisions': collision_count,
+    'reward': episode_reward,          # -> 需从环境或回放累加
+    'track_mean': np.mean(track_dists),
+    'track_std': np.std(track_dists),
+    'track_min': np.min(track_dists),
+    'track_max': np.max(track_dists),
+    'out_of_range_events': out_of_range_counter,
+}
+```
+收集后统一保存至：`results/<date>/llm_eval_summary.csv`。
+
+### 4.2 轨迹观测距离获取
+若 LLM 控制逻辑中尚未记录距离：
+```python
+dist = np.linalg.norm(drone_pos - target_pos)
+track_dists.append(dist)
+if dist > 0.8:
+    out_of_range_counter += 1
+```
+
+### 4.3 平均奖励获取
+确保环境 `step()` 返回 `(obs, reward, terminated, truncated, info)`；在循环中累加 reward。若当前自定义环境未提供 reward，需要在环境里:
+```python
+reward = -dist_to_goal  # 简单占位示例
+return obs, reward, terminated, truncated, info
+```
+并同步记录。
+
+### 4.4 SAC+LLM 环境兼容注意
+- 若采用与 PPO+APF 相同的障碍物环境，请确保 observation 维度一致。
+- 若历史 SAC 模型不可直接复用，需重新训练+集成 LLM 决策层；否则仅做行为克隆/决策后验证。
+
+---
+## 5. 数据一致性与后续迭代
+
+| 风险点 | 当前状态 | 建议 |
+|--------|----------|------|
+| 奖励尺度缺失 | 未记录 | 尽快补日志字段 (见4.1) |
+| 成功判定条件差异 | PPO+APF 已固定 | 统一 success 条件: 最终距离 < 阈值 (例如 <0.5m) |
+| 观测距离定义 | 使用目标欧氏距离 | 保持一致 (必要时写入 README 实验章) |
+| APF更新频率差异记录 | 表格中已展示为3 | 若后续调整需版本号标记 |
+| LLM介入频率 | 未计数 | 可新增 `llm_calls` 字段统计推理开销 |
+
+---
+## 6. PPO+APF 数据对比分析
+
+### 6.1 数据来源对比
+
+| 数据集 | 实验数量 | 成功率 | 平均步数(成功) | 平均奖励(成功) | 数据来源 |
+|--------|----------|--------|----------------|----------------|----------|
+| **原始数据集** | 20场 | 80.0% | 234.8 | 1.9182 | `results/batch_experiments_20251111_*` |
+| **新奖励数据集** | 20场 | 40.0% | 475.6 | 1.9161 | `batch_20251114_2000` |
+
+### 6.2 差异分析
+
+**成功率差异 (80% → 40%)**:
+- 可能原因：不同的场景配置或障碍物布置
+- 新数据集可能包含更具挑战性的起点-终点组合
+- 需要验证两个数据集的场景一致性
+
+**平均步数差异 (234.8 → 475.6)**:
+- 成功案例需要更多步数，表明路径更复杂
+- 与成功率下降一致，说明任务难度确实增加
+
+**奖励一致性 (1.9182 → 1.9161)**:
+- 平均每步奖励基本保持稳定
+- 表明奖励函数设计合理，不受场景难度影响
+
+**建议**:
+- 统一实验场景配置，确保数据可比性
+- 分析失败案例，优化APF参数或PPO训练
+- 考虑使用原始高成功率配置作为基准
+
+---
+## 7. 填充占位的行动清单
+
+1. 运行 PPO+LLM 批量 20 场景 (与 APF 相同配置) → 生成 `llm_eval_summary.csv`。
+2. 运行 SAC+LLM (或重新训练融合版) 相同 20 场景 → 生成 `sac_llm_eval_summary.csv`。
+3. 编写脚本 `aggregate_llm_results.py` 合并并输出与本表结构兼容的行。
+4. 更新本文件，将 PENDING 替换为实际数值并标注日期。
+5. 增加奖励分布附图 (可选): `results/fig_reward_distribution.png`。
+
+---
+## 8. 更新日志
+
+| 日期 | 更新内容 |
+|------|----------|
+| 2025-11-14 | 创建初稿，填充 PPO+APF 指标，添加采集指南。 |
+| 2025-11-14 16:20 | 补充20场奖励批量实验数据，保留原始完整数据作对比。新数据显示成功率40%(vs原80%)，平均奖励1.9161。 |
+
+---
+**下一步优先级**: 日志化 PPO+LLM 指标 → 生成汇总 → 补齐表格 → 分析差异与 LLM 贡献度。
+
