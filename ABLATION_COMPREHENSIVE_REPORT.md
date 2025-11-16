@@ -778,7 +778,7 @@ print(f"显著性: {'是' if p_value < 0.05 else '否'}")
 
 ### 阶段3: 重训练实验python generate_vector_figures.py
 
-- [ ] 观测维度消融 (SAC-22D, PPO-75D)
+- [x] 观测维度消融 (SAC-22D, PPO-75D)
 - [ ] 动作空间消融 (PPO 5%, 10%, 25%)
 - [ ] 组件交互效应分析
 
