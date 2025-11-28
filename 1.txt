@@ -405,6 +405,171 @@ Output: Updated θ, φ₁, φ₂
 34: return θ, φ₁, φ₂
 ```
 
+### _Algorithm Flow Diagrams_
+
+**Figure 1: Two-Stage Framework Overview**
+
+```mermaid
+graph TD
+    A[Start] --> B[Stage 1: RL Training]
+    B --> C{Curriculum<br/>Learning}
+    C --> D[1-Waypoint<br/>No Obstacles]
+    D --> E[1-Waypoint<br/>2 Obstacles]
+    E --> F[2-Waypoints<br/>2 Obstacles]
+    F --> G[5-Waypoints<br/>2 Obstacles]
+    G --> H{Converged?<br/>SR ≥ 95%}
+    H -->|No| C
+    H -->|Yes| I[Export Policy π*]
+    
+    I --> J[Stage 2: LLM Planning]
+    J --> K[LLM Generates<br/>Waypoint Sequence]
+    K --> L[Virtual Target<br/>Injection]
+    L --> M[RL Policy<br/>Execution]
+    M --> N{Waypoint<br/>Reached?}
+    N -->|Yes| O{More<br/>Waypoints?}
+    N -->|No| M
+    O -->|Yes| K
+    O -->|No| P{Goal<br/>Reached?}
+    P -->|Yes| Q[Success]
+    P -->|No| R[Timeout/Failure]
+    
+    style B fill:#e1f5ff
+    style J fill:#ffe1f5
+    style Q fill:#90EE90
+    style R fill:#FFB6C6
+```
+
+**Figure 2: PPO Training Iteration**
+
+```mermaid
+graph LR
+    A[Collect Trajectories<br/>8 Parallel Envs] --> B[Compute Returns<br/>R_t = Σγ^l·r_{t+l}]
+    B --> C[Compute Value<br/>V_φ o_t]
+    C --> D[Calculate TD Error<br/>δ_t = r_t + γV_φ o_{t+1} - V_φ o_t]
+    D --> E[GAE Advantages<br/>Â_t = Σ γλ^l·δ_{t+l}]
+    E --> F[Policy Update<br/>L^CLIP]
+    F --> G[Value Update<br/>L^V]
+    G --> H{10 Epochs<br/>Complete?}
+    H -->|No| F
+    H -->|Yes| I[Next Iteration]
+    
+    style A fill:#FFE4B5
+    style E fill:#B5E4FF
+    style I fill:#90EE90
+```
+
+**Figure 3: Virtual Target Execution**
+
+```mermaid
+flowchart TD
+    Start([Episode Start]) --> Init[Initialize:<br/>t=0, idx=0<br/>p_0 = start_pos]
+    Init --> GetWP[Get Current Waypoint<br/>p_vt = W idx]
+    GetWP --> GetObs[Get Observation o_t]
+    GetObs --> Inject[Inject Virtual Target<br/>o_t vt_indices = p_vt - p_t]
+    Inject --> Policy[Execute Policy<br/>a_t = π* o_t]
+    Policy --> Step[Environment Step<br/>p_{t+1}, r_t = step a_t]
+    Step --> CheckCol{Collision?<br/>d_obs ≤ 0}
+    CheckCol -->|Yes| Fail([Failure])
+    CheckCol -->|No| CheckReach{Reached?<br/>||p_{t+1} - p_vt|| < 0.15}
+    CheckReach -->|Yes| IncIdx[idx = idx + 1]
+    CheckReach -->|No| CheckTime
+    IncIdx --> CheckMore{More<br/>Waypoints?}
+    CheckMore -->|Yes| GetWP
+    CheckMore -->|No| CheckGoal{At Goal?<br/>||p_t - p_goal|| < 0.5}
+    CheckGoal -->|Yes| Success([Success])
+    CheckGoal -->|No| CheckTime
+    CheckTime{t < T_max?}
+    CheckTime -->|Yes| GetObs
+    CheckTime -->|No| Timeout([Timeout])
+    
+    style Start fill:#90EE90
+    style Success fill:#32CD32
+    style Fail fill:#FF6347
+    style Timeout fill:#FFA500
+```
+
+**Figure 4: LLM Planning Strategy Selection**
+
+```mermaid
+graph TD
+    A[Input: p_t, p_goal, Obstacles] --> B[Analyze Obstacle Configuration]
+    B --> C{Obstacle<br/>Position}
+    
+    C -->|Above Path| D[Vertical Strategy]
+    C -->|Side of Path| E[Lateral Strategy]
+    C -->|Blocking Path| F[Three-Segment Strategy]
+    C -->|Dense Field| G[High-Altitude Strategy]
+    
+    D --> H[Generate Waypoints<br/>Spacing = 0.2m]
+    E --> H
+    F --> H
+    G --> H
+    
+    H --> I[Validate Collision-Free]
+    I --> J{Valid?}
+    J -->|No| K[Adjust Waypoints<br/>Safety Margin +0.3m]
+    K --> I
+    J -->|Yes| L[Compute Path Length<br/>L_path = Σ||w_{i+1} - w_i||]
+    
+    L --> M[Return Waypoint Sequence]
+    
+    style A fill:#E1F5FF
+    style M fill:#90EE90
+    style K fill:#FFE4B5
+```
+
+**Figure 5: Curriculum Learning Transfer**
+
+```mermaid
+graph LR
+    A[Stage 0<br/>1-WP, 0-Obs<br/>500K steps] -->|θ₁⁰ = θ₀*| B[Stage 1<br/>1-WP, 2-Obs<br/>1.0M steps]
+    B -->|θ₂⁰ = θ₁*| C[Stage 2<br/>2-WP, 2-Obs<br/>1.5M steps]
+    C -->|θ₄⁰ = θ₂*| D[Stage 4<br/>5-WP, 2-Obs<br/>1.92M steps]
+    
+    A1[SR: 95%] -.-> A
+    B1[SR: 100%] -.-> B
+    C1[SR: 96.7%] -.-> C
+    D1[SR: 96.7%] -.-> D
+    
+    D --> E[Final Policy π*]
+    
+    style A fill:#FFE4B5
+    style B fill:#FFD4B5
+    style C fill:#FFC4B5
+    style D fill:#FFB4B5
+    style E fill:#90EE90
+```
+
+**Figure 6: Ablation Experiment Design**
+
+```mermaid
+graph TD
+    A[Full System<br/>PPO+LLM+VT] --> B[Baseline<br/>SR = 96.3%]
+    
+    C[Remove LLM Planning<br/>PPO+Rule+VT] --> D[Ablation-1<br/>SR = 95.7%]
+    
+    E[Remove Planning<br/>PPO+VT Only] --> F[Ablation-2<br/>SR = 1.7%]
+    
+    G[Remove All<br/>PPO Only] --> H[Ablation-3<br/>SR = 0.0%]
+    
+    B --> I[Δ_planning = 0.6%]
+    D --> I
+    
+    D --> J[Δ_virtual = 94.0%]
+    F --> J
+    
+    F --> K[Δ_RL = 1.7%]
+    H --> K
+    
+    style A fill:#90EE90
+    style C fill:#FFE4B5
+    style E fill:#FFB6C6
+    style G fill:#FF6347
+    style I fill:#B5E4FF
+    style J fill:#B5FFE4
+    style K fill:#E4B5FF
+```
+
 ### _Robust MPC with Control Barrier Functions_
 
 Our RMPC solves the following finite-horizon optimization at each step:
