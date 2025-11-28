@@ -188,6 +188,223 @@ $$L_\pi(\theta) = \mathbb{E}_{\mathbf{s}_t\sim\mathcal{D},\mathbf{a}_t\sim\pi_\t
 
 Both SAC and TD3 use 75-D observation space (vs. PPO's 22-D) and smaller action range (±5% RPM vs. ±50%) to ensure fair comparison of algorithm capabilities rather than hyperparameter tuning.
 
+### _Algorithm Pseudocode_
+
+The complete training and deployment pipeline is formalized in the following algorithms:
+
+**Algorithm 1: Two-Stage Training Framework**
+```
+Input: Environment E, curriculum stages S = {s₀, s₁, ..., sₙ}
+Output: Trained policy π*, LLM planner Π_LLM
+
+1: // Stage 1: Low-level RL training with curriculum
+2: Initialize policy π₀ with random weights θ₀
+3: for stage s in S do
+4:     Configure environment: waypoints ← s.waypoints, obstacles ← s.obstacles
+5:     θₛ ← θₛ₋₁  // Transfer previous stage parameters
+6:     while E[R_total] < R_threshold^(s) do
+7:         Collect trajectories {(oₜ, aₜ, rₜ)} using πθₛ
+8:         Compute advantages Âₜ using GAE(λ=0.95, γ=0.99)
+9:         Update θₛ ← OPTIMIZE_PPO(θₛ, trajectories, Âₜ)
+10:    end while
+11:    Save checkpoint θₛ*
+12: end for
+13: π* ← πθₙ*  // Export converged policy
+14:
+15: // Stage 2: LLM planner integration
+16: Initialize LLM planner Π_LLM with strategy library
+17: Train virtual target injection module
+18: return π*, Π_LLM
+```
+
+**Algorithm 2: PPO Policy Optimization**
+```
+Input: Policy πθ, value function Vφ, trajectories D, advantages Â
+Output: Updated parameters θ', φ'
+
+1: for epoch = 1 to K do  // K=10 epochs
+2:     for mini-batch B ⊂ D do
+3:         // Compute probability ratio
+4:         r(θ) ← π_θ(a|o) / π_θ_old(a|o)
+5:         
+6:         // Clipped surrogate objective
+7:         L^CLIP ← min(r(θ)·Â, clip(r(θ), 1-ε, 1+ε)·Â)
+8:         
+9:         // Value function loss
+10:        L^V ← (Vφ(o) - R_target)²
+11:        
+12:        // Entropy bonus
+13:        L^ENT ← -H(πθ(·|o))
+14:        
+15:        // Combined loss
+16:        L ← -L^CLIP + c₁·L^V - c₂·L^ENT
+17:        
+18:        // Gradient descent
+19:        θ ← θ - α∇_θ L
+20:        φ ← φ - α∇_φ L
+21:    end for
+22: end for
+23: return θ, φ
+```
+
+**Algorithm 3: LLM Geometric Planning**
+```
+Input: Current position p_t, goal p_goal, obstacle set O
+Output: Waypoint sequence W = {w₁, w₂, ..., wₘ}
+
+1: // Construct natural language prompt
+2: prompt ← FORMAT_PROMPT(p_t, p_goal, O)
+3: 
+4: // Query LLM (GPT-4-turbo API)
+5: response ← LLM.query(prompt)
+6: strategy, W_raw ← PARSE_JSON(response)
+7:
+8: // Validate and refine waypoints
+9: W ← []
+10: for i = 1 to length(W_raw) do
+11:     w_i ← W_raw[i]
+12:     
+13:     // Check obstacle collision
+14:     if MIN_DISTANCE(w_i, O) < d_safe then
+15:         w_i ← PROJECT_TO_SAFE(w_i, O, d_safe)
+16:     end if
+17:     
+18:     // Ensure 0.2m spacing
+19:     if i > 1 and ||w_i - w_{i-1}|| > 0.25 then
+20:         w_mid ← INTERPOLATE(w_{i-1}, w_i, spacing=0.2)
+21:         W.append(w_mid)
+22:     end if
+23:     
+24:     W.append(w_i)
+25: end for
+26:
+27: return W
+```
+
+**Algorithm 4: Virtual Target Execution Loop**
+```
+Input: Policy π*, waypoint sequence W, max_steps T_max
+Output: Success/Failure flag, trajectory τ
+
+1: Initialize: t ← 0, p₀ ← INITIAL_POSITION, τ ← []
+2: current_waypoint_idx ← 0
+3:
+4: while t < T_max and current_waypoint_idx < length(W) do
+5:     // Select next virtual target
+6:     p_vt ← W[current_waypoint_idx]
+7:     
+8:     // Modify observation with virtual target
+9:     o_t ← GET_OBSERVATION()
+10:    o_t[vt_indices] ← p_vt - p_t
+11:    
+12:    // Execute RL policy
+13:    a_t ← π*(o_t)
+14:    p_{t+1}, r_t ← STEP(a_t)
+15:    τ.append((p_t, a_t, r_t))
+16:    
+17:    // Check waypoint reaching condition
+18:    if ||p_{t+1} - p_vt|| < 0.15 then
+19:        current_waypoint_idx ← current_waypoint_idx + 1
+20:    end if
+21:    
+22:    // Check collision
+23:    if MIN_DISTANCE(p_{t+1}, O) ≤ 0 then
+24:        return FAILURE, τ
+25:    end if
+26:    
+27:    t ← t + 1
+28:    p_t ← p_{t+1}
+29: end while
+30:
+31: // Check final goal reaching
+32: if ||p_t - p_goal|| < 0.5 then
+33:     return SUCCESS, τ
+34: else
+35:     return TIMEOUT, τ
+36: end if
+```
+
+**Algorithm 5: SAC Training Loop**
+```
+Input: Replay buffer D, Q-networks Q_φ₁, Q_φ₂, policy π_θ, temperature α
+Output: Updated θ, φ₁, φ₂, α
+
+1: Initialize target networks: φ̄₁ ← φ₁, φ̄₂ ← φ₂
+2: Initialize temperature: α ← INITIAL_TEMPERATURE
+3:
+4: for iteration = 1 to N do
+5:     // Collect experience
+6:     s_t ← ENV.reset()
+7:     a_t ~ π_θ(·|s_t)
+8:     s_{t+1}, r_t ← ENV.step(a_t)
+9:     D.store(s_t, a_t, r_t, s_{t+1})
+10:    
+11:    // Sample mini-batch
+12:    B ← SAMPLE(D, batch_size=256)
+13:    
+14:    // Compute target
+15:    a_{t+1} ~ π_θ(·|s_{t+1})
+16:    y ← r + γ(min(Q_φ̄₁(s_{t+1}, a_{t+1}), Q_φ̄₂(s_{t+1}, a_{t+1})) - α·log π_θ(a_{t+1}|s_{t+1}))
+17:    
+18:    // Update Q-functions
+19:    L_Q ← Σ(Q_φᵢ(s, a) - y)²  for i ∈ {1,2}
+20:    φᵢ ← φᵢ - β∇_φᵢ L_Q
+21:    
+22:    // Update policy
+23:    L_π ← E[α·log π_θ(a|s) - Q_φ₁(s, a)]
+24:    θ ← θ - β∇_θ L_π
+25:    
+26:    // Update temperature
+27:    L_α ← -α(log π_θ(a|s) + H_target)
+28:    α ← α - β∇_α L_α
+29:    
+30:    // Soft update targets
+31:    φ̄ᵢ ← τφᵢ + (1-τ)φ̄ᵢ  for i ∈ {1,2}
+32: end for
+33: return θ, φ₁, φ₂, α
+```
+
+**Algorithm 6: TD3 Training Loop**
+```
+Input: Replay buffer D, Q-networks Q_φ₁, Q_φ₂, policy π_θ, noise σ
+Output: Updated θ, φ₁, φ₂
+
+1: Initialize target networks: θ̄ ← θ, φ̄₁ ← φ₁, φ̄₂ ← φ₂
+2: policy_delay ← 2
+3:
+4: for iteration = 1 to N do
+5:     // Collect experience with exploration noise
+6:     s_t ← ENV.reset()
+7:     a_t ← π_θ(s_t) + ε, ε ~ N(0, σ)
+8:     s_{t+1}, r_t ← ENV.step(a_t)
+9:     D.store(s_t, a_t, r_t, s_{t+1})
+10:    
+11:    // Sample mini-batch
+12:    B ← SAMPLE(D, batch_size=256)
+13:    
+14:    // Target policy smoothing
+15:    ã ← π_θ̄(s_{t+1}) + clip(ε, -c, c), ε ~ N(0, σ̃)
+16:    
+17:    // Compute target with double Q-learning
+18:    y ← r + γ·min(Q_φ̄₁(s_{t+1}, ã), Q_φ̄₂(s_{t+1}, ã))
+19:    
+20:    // Update both Q-functions
+21:    L_Q ← Σ(Q_φᵢ(s, a) - y)²  for i ∈ {1,2}
+22:    φᵢ ← φᵢ - β∇_φᵢ L_Q
+23:    
+24:    // Delayed policy update
+25:    if iteration mod policy_delay == 0 then
+26:        L_π ← -E[Q_φ₁(s, π_θ(s))]
+27:        θ ← θ - β∇_θ L_π
+28:        
+29:        // Soft update all targets
+30:        θ̄ ← τθ + (1-τ)θ̄
+31:        φ̄ᵢ ← τφᵢ + (1-τ)φ̄ᵢ  for i ∈ {1,2}
+32:    end if
+33: end for
+34: return θ, φ₁, φ₂
+```
+
 ### _Robust MPC with Control Barrier Functions_
 
 Our RMPC solves the following finite-horizon optimization at each step:
